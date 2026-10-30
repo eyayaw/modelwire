@@ -8,7 +8,7 @@ import httpx2
 import pytest
 
 import modelwire
-from modelwire import APIError, OpenAI, Reply, ReplyError
+from modelwire import Anthropic, APIError, OpenAI, Reply, ReplyError
 
 SCHEMA = {
     "type": "object",
@@ -17,7 +17,7 @@ SCHEMA = {
     "additionalProperties": False,
 }
 TEXT = '{"ok": true}'
-HEADERS = {"authorization"}
+HEADERS = {"authorization", "x-api-key", "anthropic-version"}
 # Each class's reply with TEXT, from a prompt of 120 tokens: 100 read from the cache and 5
 # written to it.
 REPLIES = {
@@ -33,7 +33,18 @@ REPLIES = {
             "input_tokens_details": {"cached_tokens": 100, "cache_write_tokens": 5},
         },
     },
+    Anthropic: {
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": TEXT}],
+        "usage": {
+            "input_tokens": 15,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 5,
+            "output_tokens": 7,
+        },
+    },
 }
+SYSTEM = {"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral"}}
 
 
 class Server:
@@ -117,6 +128,33 @@ def sleeps(monkeypatch):
                 "store": False,
             },
         ),
+        (
+            Anthropic,
+            "sk-test",
+            SCHEMA,
+            "https://api.anthropic.com/v1/messages",
+            {"x-api-key": "sk-test", "anthropic-version": "2026-10-21"},
+            {
+                "model": "a-model",
+                "system": [SYSTEM],
+                "messages": [{"role": "user", "content": "Is it ok?"}],
+                "max_tokens": 4096,
+                "output_config": {"format": {"type": "json_schema", "schema": SCHEMA}},
+            },
+        ),
+        (
+            Anthropic,
+            None,
+            None,
+            "https://api.anthropic.com/v1/messages",
+            {"anthropic-version": "2026-10-21"},
+            {
+                "model": "a-model",
+                "system": [SYSTEM],
+                "messages": [{"role": "user", "content": "Is it ok?"}],
+                "max_tokens": 4096,
+            },
+        ),
     ],
 )
 def test_request_follows_the_wire_format(cls, key, schema, url, headers, body):
@@ -191,7 +229,7 @@ def test_a_retry_after_beyond_a_minute_raises_at_once_and_says_how_long(sleeps, 
     assert sleeps == []
 
 
-@pytest.mark.parametrize("header", ["x-request-id"])
+@pytest.mark.parametrize("header", ["x-request-id", "request-id"])
 def test_an_api_error_holds_the_providers_request_id(header):
     with pytest.raises(APIError) as error:
         run(Server(httpx2.Response(400, headers={header: "req_1"})), reply)
@@ -301,6 +339,27 @@ def test_an_error_without_a_server_message_says_what_to_do(response, message):
             },
             "^the reply has no text$",
         ),
+        (
+            Anthropic,
+            {"stop_reason": "refusal", "stop_details": {"explanation": "Unsafe."}},
+            r"^the model refused: Unsafe\.$",
+        ),
+        (
+            Anthropic,
+            {"stop_reason": "max_tokens", "content": []},
+            "^the reply reached max_tokens; raise it$",
+        ),
+        (Anthropic, {"stop_reason": "end_turn", "content": []}, "^the reply has no text$"),
+        (
+            Anthropic,
+            {"stop_reason": "end_turn", "content": [{"type": "text", "text": ""}]},
+            "^the reply has no text$",
+        ),
+        (
+            Anthropic,
+            {"stop_reason": "pause_turn", "content": [{"type": "text", "text": "x"}]},
+            "^the reply ended with stop_reason 'pause_turn'$",
+        ),
     ],
 )
 def test_an_unusable_reply_raises_reply_error(cls, body, message):
@@ -316,7 +375,7 @@ def test_an_unusable_reply_raises_reply_error(cls, body, message):
         (OpenAI, {"base_url": "http://10.0.0.5:8000/v1"}, reply, "refusing"),
         (OpenAI, {"key": "sk-test\n"}, reply, "key"),
         (OpenAI, {"key": " sk-test"}, reply, "key"),
-        (OpenAI, {"key": ""}, reply, "key"),
+        (Anthropic, {"key": ""}, reply, "key"),
         (OpenAI, {"timeout": 0}, reply, "timeout"),
         (OpenAI, {"timeout": float("nan")}, reply, "timeout"),
         (OpenAI, {"retries": -1}, reply, "retries"),
@@ -365,7 +424,7 @@ def test_repr_shows_the_base_url_and_never_the_key():
     assert repr(OpenAI("sk-secret")) == "OpenAI(base_url='https://api.openai.com/v1')"
 
 
-@pytest.mark.parametrize(("cls", "field"), [(OpenAI, "instructions")])
+@pytest.mark.parametrize(("cls", "field"), [(OpenAI, "instructions"), (Anthropic, "system")])
 def test_a_blank_system_prompt_is_not_sent(cls, field):
     server = Server(ok(cls))
     run(server, lambda client: reply(client, system=" \n"), cls)
