@@ -1,4 +1,4 @@
-"""Async client for OpenAI-compatible APIs."""
+"""Async clients for OpenAI- and Anthropic-compatible APIs."""
 
 import asyncio
 import email.utils
@@ -11,7 +11,7 @@ from typing import Any, Self
 
 import httpx2
 
-__all__ = ["APIError", "OpenAI", "Reply", "ReplyError"]
+__all__ = ["APIError", "Anthropic", "OpenAI", "Reply", "ReplyError"]
 
 type _JSON = dict[str, Any]
 
@@ -24,16 +24,22 @@ _RETRY_ERRORS = (
     httpx2.WriteError,
     httpx2.WriteTimeout,
 )
-# The statuses OpenAI's SDK retries: https://github.com/openai/openai-python#retries
+# The statuses both providers' SDKs retry; 5xx covers Anthropic's 529.
+# https://github.com/openai/openai-python#retries
+# https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python#retries
 _RETRY_STATUSES = frozenset({408, 409, 429, *range(500, 600)})
 _CUT_OFF = "the reply reached max_tokens; raise it"
 _NO_TEXT = "the reply holds no text"
 # OpenAI's SDK waits 5 s for a connection and 600 s for the rest, since a reasoning model can
 # think for minutes: https://github.com/openai/openai-python/blob/main/src/openai/_constants.py
 _CONNECT_TIMEOUT = 5.0
-# The header the API puts its request ID in:
+# The newest version, which the official SDK sends:
+# https://platform.claude.com/docs/en/api/versioning
+_ANTHROPIC_VERSION = frozendict({"anthropic-version": "2026-10-21"})
+# The header each API puts its request ID in:
 # https://developers.openai.com/api/reference/overview#debugging-requests
-_REQUEST_ID_HEADERS = ("x-request-id",)
+# https://platform.claude.com/docs/en/api/errors#request-id
+_REQUEST_ID_HEADERS = ("x-request-id", "request-id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +204,61 @@ class OpenAI(_Client):
         return _responses_reply(await self._post("responses", body, marker="status"))
 
 
+class Anthropic(_Client):
+    """Client for Anthropic's Messages API, or any server compatible with it."""
+
+    def __init__(
+        self,
+        key: str | None = None,
+        *,
+        base_url: str = "https://api.anthropic.com/v1",
+        timeout: float = 600.0,
+        retries: int = 2,
+        transport: httpx2.AsyncBaseTransport | None = None,
+    ) -> None:
+        super().__init__(
+            base_url,
+            credentials=_credentials("x-api-key", key),
+            headers=_ANTHROPIC_VERSION,
+            timeout=timeout,
+            retries=retries,
+            transport=transport,
+        )
+
+    async def ask(
+        self,
+        model: str,
+        prompt: str,
+        *,
+        system: str = "",
+        schema: dict[str, Any] | None = None,
+        max_tokens: int = 4096,
+    ) -> Reply:
+        """
+        Return the model's reply to prompt.
+
+        With a schema, the server returns structured outputs, so reply.text is JSON. Raises
+        ReplyError for a refused, truncated, or empty reply, APIError for an HTTP error, and
+        httpx2.TransportError when the connection fails.
+        """
+        # The request and its response:
+        # https://platform.claude.com/docs/en/api/messages
+        body: _JSON = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+        }
+        if system.strip():
+            # The system prompt holds the fixed part of a prompt, so it is marked for caching.
+            cache = {"type": "ephemeral"}
+            body["system"] = [{"type": "text", "text": system, "cache_control": cache}]
+        if schema is not None:
+            # output_config is generally available and needs no beta header:
+            # https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+            body["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
+        return _messages_reply(await self._post("messages", body, marker="stop_reason"))
+
+
 def _responses_reply(body: _JSON) -> Reply:
     if (status := body["status"]) != "completed":
         reason = (body.get("incomplete_details") or {}).get("reason")
@@ -222,6 +283,38 @@ def _responses_reply(body: _JSON) -> Reply:
         output_tokens=usage.get("output_tokens") or 0,
         cache_read_tokens=details.get("cached_tokens") or 0,
         cache_write_tokens=details.get("cache_write_tokens") or 0,
+    )
+
+
+def _messages_reply(body: _JSON) -> Reply:
+    # Every stop_reason but end_turn ends the reply short, since modelwire sends no tools or
+    # stop sequences: https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+    # A refusal's category and explanation are in stop_details:
+    # https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#refusal-response
+    stop = body["stop_reason"]
+    if stop == "refusal":
+        details = body.get("stop_details") or {}
+        reason = _detail(details.get("explanation"), details.get("category"))
+        raise ReplyError(f"the model refused: {reason}")
+    if stop == "max_tokens":
+        raise ReplyError(_CUT_OFF)
+    if stop != "end_turn":
+        raise ReplyError(f"the reply ended with stop_reason {_quote(repr(stop))}")
+    blocks = body.get("content") or []
+    text = "".join(block.get("text") or "" for block in blocks if block.get("type") == "text")
+    if not text:
+        raise ReplyError(_NO_TEXT)
+    usage = body.get("usage") or {}
+    read = usage.get("cache_read_input_tokens") or 0
+    written = usage.get("cache_creation_input_tokens") or 0
+    return Reply(
+        text=text,
+        # input_tokens leaves out the tokens read from or written to the cache:
+        # https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+        input_tokens=(usage.get("input_tokens") or 0) + read + written,
+        output_tokens=usage.get("output_tokens") or 0,
+        cache_read_tokens=read,
+        cache_write_tokens=written,
     )
 
 
