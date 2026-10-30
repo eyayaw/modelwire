@@ -1,9 +1,10 @@
-"""Async clients for the OpenAI Responses and Anthropic Messages APIs."""
+"""Async clients for the OpenAI Responses, Anthropic Messages, and System One APIs."""
 
 import asyncio
 import email.utils
 import ipaddress
 import json
+import math
 import random
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,7 +12,7 @@ from typing import Any, Self
 
 import httpx2
 
-__all__ = ["APIError", "Anthropic", "OpenAI", "Reply", "ReplyError"]
+__all__ = ["APIError", "Anthropic", "OpenAI", "Reply", "ReplyError", "SystemOne"]
 
 type _JSON = dict[str, Any]
 
@@ -24,7 +25,7 @@ _RETRY_ERRORS = (
     httpx2.WriteError,
     httpx2.WriteTimeout,
 )
-# The statuses both providers' SDKs retry; 5xx covers Anthropic's 529.
+# The statuses both providers' SDKs retry; 5xx covers Anthropic's and TypeSafe's 529.
 # https://github.com/openai/openai-python#retries
 # https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python#retries
 _RETRY_STATUSES = frozenset({408, 409, 429, *range(500, 600)})
@@ -39,7 +40,8 @@ _ANTHROPIC_VERSION = frozendict({"anthropic-version": "2026-10-21"})
 # The header each API puts its request ID in:
 # https://developers.openai.com/api/reference/overview#debugging-requests
 # https://platform.claude.com/docs/en/api/errors#request-id
-_REQUEST_ID_HEADERS = ("x-request-id", "request-id")
+# TypeSafe documents none, but its responses carry x-typesafe-request-id, seen on 2026-10-31.
+_REQUEST_ID_HEADERS = ("x-request-id", "request-id", "x-typesafe-request-id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +261,49 @@ class Anthropic(_Client):
         return _messages_reply(await self._post("messages", body, marker="stop_reason"))
 
 
+class SystemOne(_Client):
+    """Client for TypeSafe's System One API, or any server compatible with it."""
+
+    def __init__(
+        self,
+        key: str | None = None,
+        *,
+        base_url: str = "https://api.typesafe.ai/v1",
+        timeout: float = 600.0,
+        retries: int = 2,
+        transport: httpx2.AsyncBaseTransport | None = None,
+    ) -> None:
+        super().__init__(
+            base_url,
+            credentials=_credentials("Authorization", key, "Bearer "),
+            timeout=timeout,
+            retries=retries,
+            transport=transport,
+        )
+
+    async def ask(
+        self,
+        model: str,
+        state: str | dict[str, Any] | list[Any],
+        questions: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Return exactly one answer per question, each checked for its type's numeric fields.
+
+        Raises ReplyError for a missing or malformed answer, APIError for an HTTP error, and
+        httpx2.TransportError when the connection fails.
+        """
+        # The request and its response: https://docs.typesafe.ai/api/system-one.md
+        # and the OpenAPI schema at https://api.typesafe.ai/openapi.json
+        body = {"model": model, "state": state, "questions": questions}
+        answers = (await self._post("systemone", body, marker="answers"))["answers"] or {}
+        for name, question in questions.items():
+            if not _complete(answer := answers.get(name), question):
+                kind = question.get("type")
+                raise ReplyError(f"no complete {kind} answer to {name!r}: {_quote(repr(answer))}")
+        return {name: answers[name] for name in questions}
+
+
 def _responses_reply(body: _JSON) -> Reply:
     if (status := body["status"]) != "completed":
         reason = (body.get("incomplete_details") or {}).get("reason")
@@ -316,6 +361,40 @@ def _messages_reply(body: _JSON) -> Reply:
         cache_read_tokens=read,
         cache_write_tokens=written,
     )
+
+
+def _complete(answer: object, question: dict[str, Any]) -> bool:
+    kind = question.get("type")
+    if not isinstance(answer, dict) or answer.get("type") != kind:
+        return False
+    criteria = question.get("criteria") or ()
+    match kind:
+        case "noul":
+            return _number(answer.get("noul"))
+        case "choice":
+            options = list(criteria)
+            picked = answer.get("choice") in options
+        case "score":
+            # Its probabilities are keyed by level index, as its legend is. The legend echoes
+            # the caller's criteria, so it goes unchecked.
+            options = [str(level) for level in range(len(criteria))]
+            picked = _number(answer.get("score"))
+        case _:
+            # A box answer has coordinates, but a box question needs an image, and
+            # modelwire sends none.
+            return False
+    probabilities = answer.get("probabilities")
+    return (
+        picked
+        and _number(answer.get("confidence"))
+        and isinstance(probabilities, dict)
+        and all(_number(probabilities.get(option)) for option in options)
+    )
+
+
+def _number(value: object) -> bool:
+    # bool is an int, and json.loads accepts NaN and Infinity; none of them is an answer's number.
+    return type(value) is int or (type(value) is float and math.isfinite(value))
 
 
 def _credentials(header: str, key: str | None, prefix: str = "") -> dict[str, str]:
