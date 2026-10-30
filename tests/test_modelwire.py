@@ -8,7 +8,7 @@ import httpx2
 import pytest
 
 import modelwire
-from modelwire import Anthropic, APIError, OpenAI, Reply, ReplyError
+from modelwire import Anthropic, APIError, OpenAI, Reply, ReplyError, SystemOne
 
 SCHEMA = {
     "type": "object",
@@ -45,6 +45,31 @@ REPLIES = {
     },
 }
 SYSTEM = {"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral"}}
+QUESTIONS = {
+    "kind": {
+        "type": "choice",
+        "instructions": "What?",
+        "criteria": {"ad": "An ad.", "job": "A job."},
+    },
+    "remote": {"type": "noul", "instructions": "Is it remote?"},
+    "level": {"type": "score", "instructions": "How senior?", "criteria": ["Junior.", "Senior."]},
+}
+ANSWERS = {
+    "kind": {
+        "type": "choice",
+        "choice": "job",
+        "confidence": 0.9,
+        "probabilities": {"ad": 0.1, "job": 0.9},
+    },
+    "remote": {"type": "noul", "noul": 0.8},
+    "level": {
+        "type": "score",
+        "score": 0.4,
+        "confidence": 0.6,
+        "legend": {"0": "Junior.", "1": "Senior."},
+        "probabilities": {"0": 0.6, "1": 0.4},
+    },
+}
 
 
 class Server:
@@ -75,6 +100,10 @@ def run(server, call, cls=OpenAI, key="sk-test", **settings):
 
 def reply(client, **options):
     return client.ask("a-model", "Is it ok?", **{"system": "Be brief.", **options})
+
+
+def answer(client):
+    return client.ask("jev-latest", "A posting.", QUESTIONS)
 
 
 @pytest.fixture
@@ -229,7 +258,7 @@ def test_a_retry_after_beyond_a_minute_raises_at_once_and_says_how_long(sleeps, 
     assert sleeps == []
 
 
-@pytest.mark.parametrize("header", ["x-request-id", "request-id"])
+@pytest.mark.parametrize("header", ["x-request-id", "request-id", "x-typesafe-request-id"])
 def test_an_api_error_holds_the_providers_request_id(header):
     with pytest.raises(APIError) as error:
         run(Server(httpx2.Response(400, headers={header: "req_1"})), reply)
@@ -429,3 +458,48 @@ def test_a_blank_system_prompt_is_not_sent(cls, field):
     server = Server(ok(cls))
     run(server, lambda client: reply(client, system=" \n"), cls)
     assert field not in json.loads(server.requests[0].content)
+
+
+def test_system_one_sends_the_state_and_questions_and_returns_only_their_answers():
+    unasked = {"mood": {"type": "noul", "noul": 0.5}}
+    server = Server(httpx2.Response(200, json={"answers": ANSWERS | unasked}))
+    assert run(server, answer, SystemOne) == ANSWERS
+    [request] = server.requests
+    assert str(request.url) == "https://api.typesafe.ai/v1/systemone"
+    assert request.headers["authorization"] == "Bearer sk-test"
+    assert json.loads(request.content) == {
+        "model": "jev-latest",
+        "state": "A posting.",
+        "questions": QUESTIONS,
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "bad"),
+    [
+        ("remote", None),
+        ("remote", {"type": "choice", "choice": "job"}),
+        ("level", ANSWERS["level"] | {"score": "high"}),
+        ("remote", {"type": "noul", "noul": float("nan")}),
+        ("remote", {"type": "noul", "noul": True}),
+        ("kind", ANSWERS["kind"] | {"choice": "other"}),
+        ("kind", ANSWERS["kind"] | {"probabilities": {"job": 0.9}}),
+        ("kind", {key: value for key, value in ANSWERS["kind"].items() if key != "confidence"}),
+        ("level", ANSWERS["level"] | {"probabilities": {"0": 0.6}}),
+    ],
+)
+def test_a_missing_or_incomplete_answer_raises_reply_error(name, bad):
+    answers = {key: value for key, value in ANSWERS.items() if key != name}
+    if bad is not None:
+        answers[name] = bad
+    kind = QUESTIONS[name]["type"]
+    # Raw text, since a server can send NaN that httpx2 would refuse to encode.
+    response = httpx2.Response(200, content=json.dumps({"answers": answers}))
+    with pytest.raises(ReplyError, match=f"^no complete {kind} answer to '{name}': "):
+        run(Server(response), answer, SystemOne)
+
+
+def test_null_answers_raise_reply_error():
+    response = httpx2.Response(200, json={"answers": None})
+    with pytest.raises(ReplyError, match=r"^no complete choice answer to 'kind': None$"):
+        run(Server(response), answer, SystemOne)
