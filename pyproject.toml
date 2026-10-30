@@ -1,0 +1,20 @@
+[project]
+name = "modelwire"
+version = "0.1.0"
+description = "Async clients for OpenAI's Responses, Anthropic's Messages, and the System One APIs."
+requires-python = ">=3.15"
+authors = [{ name = "Eyayaw Beze" }]
+license = "MIT"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-randomly>=5",
+    "ruff>=0.17",
+    "ty>=0.0.86",
+]
