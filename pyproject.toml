@@ -5,7 +5,9 @@ description = "Async clients for OpenAI's Responses, Anthropic's Messages, and t
 requires-python = ">=3.15"
 authors = [{ name = "Eyayaw Beze" }]
 license = "MIT"
-dependencies = []
+dependencies = [
+    "httpx2>=2.13",
+]
 
 [build-system]
 requires = ["uv_build>=0.13,<0.14"]
