@@ -2,6 +2,7 @@
 name = "modelwire"
 version = "0.1.0"
 description = "Async clients for the OpenAI Responses, Anthropic Messages, and System One APIs, and servers compatible with them."
+readme = "README.md"
 requires-python = ">=3.15"
 authors = [{ name = "Eyayaw Beze" }]
 license = "MIT"
