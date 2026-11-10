@@ -1,4 +1,4 @@
-"""Async clients for the OpenAI Responses, Anthropic Messages, and System One APIs."""
+"""Async clients for OpenAI Responses, Anthropic Messages, Gemini Interactions, and System One."""
 
 import asyncio
 import email.utils
@@ -12,7 +12,7 @@ from typing import Any, Self
 
 import httpx2
 
-__all__ = ["APIError", "Anthropic", "OpenAI", "Reply", "ReplyError", "SystemOne"]
+__all__ = ["APIError", "Anthropic", "Gemini", "OpenAI", "Reply", "ReplyError", "SystemOne"]
 
 type _JSON = dict[str, Any]
 
@@ -34,7 +34,7 @@ _NO_TEXT = "the reply has no text"
 # OpenAI's SDK waits 5 s for a connection and 600 s for the rest, since a reasoning model can
 # think for minutes: https://github.com/openai/openai-python/blob/main/src/openai/_constants.py
 _CONNECT_TIMEOUT = 5.0
-# The header each API puts its request ID in:
+# The header OpenAI and Anthropic put the request ID in:
 # https://developers.openai.com/api/reference/overview#debugging-requests
 # https://platform.claude.com/docs/en/api/errors#request-id
 # TypeSafe documents none, but its responses carry x-typesafe-request-id, seen on 2026-10-31.
@@ -252,6 +252,45 @@ class Anthropic(_Client):
         return _messages_reply(await self._post("messages", body, marker="stop_reason"))
 
 
+class Gemini(_Client):
+    """Client for Google's Interactions API, or any server compatible with it."""
+
+    _base_url = "https://generativelanguage.googleapis.com/v1"
+    _key_header = "x-goog-api-key"
+
+    async def ask(
+        self,
+        model: str,
+        prompt: str,
+        *,
+        system: str = "",
+        schema: dict[str, Any] | None = None,
+        max_tokens: int = 4096,
+    ) -> Reply:
+        """
+        Return the model's reply to prompt.
+
+        With a schema, the server returns structured outputs, so reply.text is JSON. Raises
+        ReplyError for a truncated or empty reply, APIError for an HTTP error, such as blocked
+        content, and httpx2.TransportError when the connection fails.
+        """
+        # The request and its response, checked on 2026-11-10:
+        # https://aistudio.google.com/api-reference/interactions-api/create-interaction.md?api-version=v1
+        body: _JSON = {
+            "model": model,
+            "input": prompt,
+            "generation_config": {"max_output_tokens": max_tokens},
+            # modelwire never continues an interaction, so the server need not store it.
+            "store": False,
+        }
+        if system.strip():
+            body["system_instruction"] = system
+        if schema is not None:
+            text_format = {"type": "text", "mime_type": "application/json", "schema": schema}
+            body["response_format"] = text_format
+        return _interaction_reply(await self._post("interactions", body, marker="status"))
+
+
 class SystemOne(_Client):
     """Client for TypeSafe's System One API, or any server compatible with it."""
 
@@ -336,6 +375,33 @@ def _messages_reply(body: _JSON) -> Reply:
         output_tokens=usage.get("output_tokens") or 0,
         cache_read_tokens=read,
         cache_write_tokens=written,
+    )
+
+
+def _interaction_reply(body: _JSON) -> Reply:
+    # max_output_tokens is the one documented cause of an incomplete interaction:
+    # https://aistudio.google.com/docs/thinking.md#token-limits
+    if (status := body["status"]) == "incomplete":
+        raise ReplyError(_CUT_OFF)
+    if status != "completed":
+        raise ReplyError(f"the reply ended with status {_quote(repr(status))}")
+    steps = [step for step in body.get("steps") or [] if step.get("type") == "model_output"]
+    parts = [*(step.get("content") or []) for step in steps]
+    text = "".join(part.get("text") or "" for part in parts if part.get("type") == "text")
+    if not text:
+        raise ReplyError(_NO_TEXT)
+    usage = body.get("usage") or {}
+    thought = usage.get("total_thought_tokens") or 0
+    return Reply(
+        text=text,
+        input_tokens=usage.get("total_input_tokens") or 0,
+        # Thought tokens are billed as output and counted apart from it:
+        # https://aistudio.google.com/docs/thinking.md#pricing
+        output_tokens=(usage.get("total_output_tokens") or 0) + thought,
+        cache_read_tokens=usage.get("total_cached_tokens") or 0,
+        # The API caches implicitly and reports no tokens written:
+        # https://aistudio.google.com/docs/caching.md
+        cache_write_tokens=0,
     )
 
 

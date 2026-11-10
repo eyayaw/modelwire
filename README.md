@@ -1,8 +1,8 @@
 # modelwire
 
-modelwire is a small async client for the OpenAI Responses, Anthropic Messages, and System One APIs,
-and servers compatible with them.
-The OpenAI and Anthropic APIs serve generative models,
+modelwire is a small async client for the OpenAI Responses, Anthropic Messages, Gemini Interactions,
+and System One APIs, and servers compatible with them.
+The OpenAI, Anthropic, and Gemini APIs serve generative models,
 and the System One API serves decision models, such as TypeSafe's Jev.
 Each client has one request method, `ask()`.
 modelwire requires Python 3.15+ and depends only on [httpx2](https://pypi.org/project/httpx2/).
@@ -13,7 +13,8 @@ uv add "modelwire @ git+https://github.com/eyayaw/modelwire@v0.1.0"
 
 ## Generative models
 
-`OpenAI` and `Anthropic` share the method `ask(model, prompt, *, system="", schema=None, max_tokens=4096)`.
+`OpenAI`, `Anthropic`, and `Gemini` share the method
+`ask(model, prompt, *, system="", schema=None, max_tokens=4096)`.
 Pass a JSON Schema to `schema` for structured outputs.
 
 ```python
@@ -43,24 +44,29 @@ async def main():
 asyncio.run(main())
 ```
 
-Similarly, for OpenAI models, change only the class and the model name:
+For OpenAI and Gemini models, change the class, the key, and the model name:
 
 ```python
-from modelwire import OpenAI
+from modelwire import Gemini, OpenAI
 
 async with OpenAI(os.environ["OPENAI_API_KEY"]) as client:
     reply = await client.ask("gpt-6.1-terra", PROMPT, system="Answer in JSON.", schema=SCHEMA)
+
+async with Gemini(os.environ["GEMINI_API_KEY"]) as client:
+    reply = await client.ask("gemini-3.8-flash", PROMPT, system="Answer in JSON.", schema=SCHEMA)
 ```
 
 The returned `Reply` contains `text`, `input_tokens`, `output_tokens`,
 `cache_read_tokens`, and `cache_write_tokens`.
-`input_tokens` includes cached tokens on both APIs, and a count omitted by the server is zero.
+`input_tokens` includes cached tokens on all three APIs, and a count omitted by the server is zero.
 Put the fixed part of your prompts in `system`, which `Anthropic` marks for caching.
 See the provider guides for structured outputs and prompt caching:
 [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
 [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching),
 [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs),
-and [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+[Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+[Gemini structured outputs](https://aistudio.google.com/docs/structured-output),
+and [Gemini context caching](https://aistudio.google.com/docs/caching).
 
 ## Decision models
 
@@ -113,6 +119,8 @@ Catch `APIError` for an HTTP error or a response without a reply, such as a fail
 its `status_code`, `code`, `retry_after`, and `request_id` attributes describe the response.
 Catch `ReplyError` for an unusable reply,
 including a refusal, truncated text, or an incomplete answer.
+The Gemini API answers blocked content with HTTP 400, so `Gemini` raises `APIError` for it,
+with a `code` such as `safety`.
 Transport failures raise `httpx2.TransportError`, and invalid client arguments raise `ValueError`.
 
 ## Not included

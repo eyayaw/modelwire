@@ -8,7 +8,7 @@ import httpx2
 import pytest
 
 import modelwire
-from modelwire import Anthropic, APIError, OpenAI, Reply, ReplyError, SystemOne
+from modelwire import Anthropic, APIError, Gemini, OpenAI, Reply, ReplyError, SystemOne
 
 SCHEMA = {
     "type": "object",
@@ -17,9 +17,9 @@ SCHEMA = {
     "additionalProperties": False,
 }
 TEXT = '{"ok": true}'
-HEADERS = {"authorization", "x-api-key", "anthropic-version"}
-# Each class's reply with TEXT, from a prompt of 120 tokens: 100 read from the cache and 5
-# written to it.
+HEADERS = {"authorization", "x-api-key", "anthropic-version", "x-goog-api-key"}
+# Each class's reply with TEXT and 7 output tokens, from a prompt of 120 tokens: 100 read from
+# the cache, and 5 written to it where the API reports cache writes, which Gemini's does not.
 REPLIES = {
     OpenAI: {
         "status": "completed",
@@ -41,6 +41,19 @@ REPLIES = {
             "cache_read_input_tokens": 100,
             "cache_creation_input_tokens": 5,
             "output_tokens": 7,
+        },
+    },
+    Gemini: {
+        "status": "completed",
+        "steps": [
+            {"type": "thought", "signature": "sig", "summary": [{"type": "text", "text": "Hmm."}]},
+            {"type": "model_output", "content": [{"type": "text", "text": TEXT}]},
+        ],
+        "usage": {
+            "total_input_tokens": 120,
+            "total_cached_tokens": 100,
+            "total_output_tokens": 4,
+            "total_thought_tokens": 3,
         },
     },
 }
@@ -184,6 +197,39 @@ def sleeps(monkeypatch):
                 "max_tokens": 4096,
             },
         ),
+        (
+            Gemini,
+            "sk-test",
+            SCHEMA,
+            "https://generativelanguage.googleapis.com/v1/interactions",
+            {"x-goog-api-key": "sk-test"},
+            {
+                "model": "a-model",
+                "system_instruction": "Be brief.",
+                "input": "Is it ok?",
+                "generation_config": {"max_output_tokens": 4096},
+                "store": False,
+                "response_format": {
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": SCHEMA,
+                },
+            },
+        ),
+        (
+            Gemini,
+            None,
+            None,
+            "https://generativelanguage.googleapis.com/v1/interactions",
+            {},
+            {
+                "model": "a-model",
+                "system_instruction": "Be brief.",
+                "input": "Is it ok?",
+                "generation_config": {"max_output_tokens": 4096},
+                "store": False,
+            },
+        ),
     ],
 )
 def test_request_follows_the_wire_format(cls, key, schema, url, headers, body):
@@ -208,9 +254,9 @@ def test_a_connection_waits_at_most_5_s_and_the_reply_takes_timeout(settings, ti
     assert server.requests[0].extensions["timeout"] == timeout
 
 
-@pytest.mark.parametrize("cls", REPLIES)
-def test_reply_holds_the_text_and_the_whole_prompt_count(cls):
-    assert run(Server(ok(cls)), reply, cls) == Reply(TEXT, 120, 7, 100, 5)
+@pytest.mark.parametrize(("cls", "written"), [(OpenAI, 5), (Anthropic, 5), (Gemini, 0)])
+def test_reply_holds_the_text_and_the_whole_prompt_count(cls, written):
+    assert run(Server(ok(cls)), reply, cls) == Reply(TEXT, 120, 7, 100, written)
 
 
 def test_transient_failures_are_retried_after_backoff_or_retry_after(sleeps):
@@ -400,6 +446,17 @@ def test_an_error_without_a_server_message_says_what_to_do(response, message):
             {"stop_reason": "pause_turn", "content": [{"type": "text", "text": "x"}]},
             "^the reply ended with stop_reason 'pause_turn'$",
         ),
+        (Gemini, {"status": "incomplete"}, "^the reply reached max_tokens; raise it$"),
+        (Gemini, {"status": "failed"}, "^the reply ended with status 'failed'$"),
+        # Only the model's output is the reply; a stored interaction also holds the prompt.
+        (
+            Gemini,
+            {
+                "status": "completed",
+                "steps": [{"type": "user_input", "content": [{"type": "text", "text": "Hi."}]}],
+            },
+            "^the reply has no text$",
+        ),
     ],
 )
 def test_an_unusable_reply_raises_reply_error(cls, body, message):
@@ -464,7 +521,10 @@ def test_repr_shows_the_base_url_and_never_the_key():
     assert repr(OpenAI("sk-secret")) == "OpenAI(base_url='https://api.openai.com/v1')"
 
 
-@pytest.mark.parametrize(("cls", "field"), [(OpenAI, "instructions"), (Anthropic, "system")])
+@pytest.mark.parametrize(
+    ("cls", "field"),
+    [(OpenAI, "instructions"), (Anthropic, "system"), (Gemini, "system_instruction")],
+)
 def test_a_blank_system_prompt_is_not_sent(cls, field):
     server = Server(ok(cls))
     run(server, lambda client: reply(client, system=" \n"), cls)

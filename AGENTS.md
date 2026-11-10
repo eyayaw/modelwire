@@ -2,8 +2,8 @@
 
 ## Purpose
 
-modelwire is a small async client for the OpenAI Responses, Anthropic Messages, and System One APIs,
-and servers compatible with them.
+modelwire is a small async client for the OpenAI Responses, Anthropic Messages, Gemini Interactions,
+and System One APIs, and servers compatible with them.
 It has one class per API and one request method, `ask()`.
 
 ## Map
@@ -12,6 +12,7 @@ It has one class per API and one request method, `ask()`.
 _Client      checks the URL and the arguments, owns the httpx2 client, _post retries
   OpenAI     ask(): request body --> _post("responses") --> _responses_reply
   Anthropic  ask(): request body --> _post("messages") --> _messages_reply
+  Gemini     ask(): request body --> _post("interactions") --> _interaction_reply
   SystemOne  ask(): request body --> _post("systemone") --> _complete per question
 ```
 
