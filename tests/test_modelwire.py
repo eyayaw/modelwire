@@ -17,7 +17,7 @@ SCHEMA = {
     "additionalProperties": False,
 }
 TEXT = '{"ok": true}'
-HEADERS = {"authorization", "x-api-key", "anthropic-version", "x-goog-api-key"}
+HEADERS = {"authorization", "anthropic-version", "x-goog-api-key"}
 # Each class's reply with TEXT and 7 output tokens, from a prompt of 120 tokens: 100 read from
 # the cache, and 5 written to it where the API reports cache writes, which Gemini's does not.
 REPLIES = {
@@ -175,7 +175,7 @@ def sleeps(monkeypatch):
             "sk-test",
             SCHEMA,
             "https://api.anthropic.com/v1/messages",
-            {"x-api-key": "sk-test", "anthropic-version": "2026-10-21"},
+            {"authorization": "Bearer sk-test", "anthropic-version": "2026-10-21"},
             {
                 "model": "a-model",
                 "system": [SYSTEM],

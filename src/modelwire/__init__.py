@@ -213,7 +213,10 @@ class Anthropic(_Client):
     """Client for Anthropic's Messages API, or any server compatible with it."""
 
     _base_url = "https://api.anthropic.com/v1"
-    _key_header = "x-api-key"
+    # x-api-key is the legacy fallback for this header, checked on 2026-11-10:
+    # https://platform.claude.com/docs/en/api/overview
+    _key_header = "Authorization"
+    _key_prefix = "Bearer "
     # The version the official SDK sends, checked on 2026-10-31:
     # https://platform.claude.com/docs/en/api/versioning
     _headers = frozendict({"anthropic-version": "2026-10-21"})
