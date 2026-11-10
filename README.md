@@ -100,7 +100,7 @@ asyncio.run(main())
 ## Servers and retries
 
 Pass `base_url` to use another compatible server,
-and leave out the key for a local server if not required:
+and leave out the key when the server needs none:
 
 ```python
 client = OpenAI(base_url="http://localhost:8000/v1")
@@ -127,4 +127,5 @@ Transport failures raise `httpx2.TransportError`, and invalid client arguments r
 
 modelwire does not provide conversations, tools, images, streaming, a synchronous API,
 reply caching, concurrency limits, extra request headers, or validation of replies against a schema.
-Anthropic keys that are not scoped to a workspace are not supported.
+`Anthropic` sends no `anthropic-workspace-id` header,
+so it cannot use a key that is not scoped to a workspace.

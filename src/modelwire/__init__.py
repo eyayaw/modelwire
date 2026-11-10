@@ -25,7 +25,7 @@ _RETRY_ERRORS = (
     httpx2.WriteError,
     httpx2.WriteTimeout,
 )
-# The statuses both providers' SDKs retry; 5xx covers Anthropic's and TypeSafe's 529.
+# The statuses OpenAI's and Anthropic's SDKs retry; 5xx covers Anthropic's and TypeSafe's 529.
 # https://github.com/openai/openai-python#retries
 # https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python#retries
 _RETRY_STATUSES = frozenset({408, 409, 429, *range(500, 600)})
@@ -60,10 +60,10 @@ class APIError(Exception):
     """
     The server answered with an HTTP error, or with a body that has no reply.
 
-    A server that has sent HTTP 200 reports a failed generation as an error object in the
-    body, so status_code can be 200. code is the body's error code when it is a string, such
-    as "server_error", retry_after the wait the server asked for, in seconds, and request_id
-    the provider's ID for the request. Each is None when the server omits it.
+    A failed generation can arrive as an error object in an HTTP 200 body, so status_code can
+    be 200. code is the body's error code when it is a string, such as "server_error".
+    retry_after is the wait the server asked for, in seconds, and request_id is the provider's
+    ID for the request. Each is None when the server omits it.
     """
 
     def __init__(self, response: httpx2.Response) -> None:
