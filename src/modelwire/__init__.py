@@ -25,7 +25,7 @@ _RETRY_ERRORS = (
     httpx2.WriteError,
     httpx2.WriteTimeout,
 )
-# The statuses OpenAI's and Anthropic's SDKs retry; 5xx covers Anthropic's and TypeSafe's 529.
+# The statuses OpenAI's and Anthropic's SDKs retry; 5xx covers Anthropic's 529.
 # https://github.com/openai/openai-python#retries
 # https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python#retries
 _RETRY_STATUSES = frozenset({408, 409, 429, *range(500, 600)})
