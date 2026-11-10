@@ -63,15 +63,24 @@ class APIError(Exception):
     """
     The server answered with an HTTP error, or with a body that has no reply.
 
-    retry_after is the wait the server asked for, in seconds, and request_id the provider's
-    ID for the request. Either is None when the server omits it.
+    A server that has sent HTTP 200 reports a failed generation as an error object in the
+    body, so status_code can be 200. code is the body's error code when it is a string, such
+    as "server_error", retry_after the wait the server asked for, in seconds, and request_id
+    the provider's ID for the request. Each is None when the server omits it.
     """
 
     def __init__(self, response: httpx2.Response) -> None:
+        body = _parse(response.content)
         self.status_code = response.status_code
+        self.code: str | None = None
+        # The error object's code, which OpenAI's SDK exposes too, checked on 2026-11-10:
+        # https://github.com/openai/openai-python/blob/main/src/openai/_exceptions.py
+        match body:
+            case {"error": {"code": str(code)}}:
+                self.code = code
         self.retry_after = _retry_after(response)
         self.request_id = next(filter(None, map(response.headers.get, _REQUEST_ID_HEADERS)), None)
-        super().__init__(f"HTTP {response.status_code} from {response.url}: {_reason(response)}")
+        super().__init__(f"HTTP {self.status_code} from {response.url}: {_reason(response, body)}")
 
 
 class ReplyError(Exception):
@@ -129,7 +138,7 @@ class _Client:
         await self._http.aclose()
 
     async def _post(self, path: str, body: _JSON, *, marker: str) -> _JSON:
-        """POST body to path and return the JSON reply, which must contain marker."""
+        """POST body to path and return the JSON reply, which must contain marker and no error."""
         for attempt in range(self._retries):
             try:
                 response = await self._http.post(path, json=body)
@@ -147,7 +156,10 @@ class _Client:
         else:
             response = await self._http.post(path, json=body)
         data = _parse(response.content) if response.is_success else None
-        if not isinstance(data, dict) or marker not in data:
+        # A server reports a failure after HTTP 200 as an error object, checked on 2026-11-10:
+        # https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_error.py
+        # https://openrouter.ai/docs/api/reference/errors-and-debugging
+        if not isinstance(data, dict) or marker not in data or data.get("error"):
             raise APIError(response)
         return data
 
@@ -185,8 +197,8 @@ class OpenAI(_Client):
         Return the model's reply to prompt.
 
         With a schema, the server returns structured outputs, so reply.text is JSON. Raises
-        ReplyError for a refused, truncated, or empty reply, APIError for an HTTP error, and
-        httpx2.TransportError when the connection fails.
+        ReplyError for a refused, truncated, or empty reply, APIError for an HTTP error or a
+        failed generation, and httpx2.TransportError when the connection fails.
         """
         # The request and its response:
         # https://developers.openai.com/api/reference/resources/responses/methods/create
@@ -309,9 +321,7 @@ def _responses_reply(body: _JSON) -> Reply:
         reason = (body.get("incomplete_details") or {}).get("reason")
         if reason == "max_output_tokens":
             raise ReplyError(_CUT_OFF)
-        error = body.get("error") or {}
-        detail = _detail(reason, error.get("message"), error.get("code"))
-        raise ReplyError(f"the reply ended with status {_quote(repr(status))}: {detail}")
+        raise ReplyError(f"the reply ended with status {_quote(repr(status))}: {_detail(reason)}")
     parts = [*(item.get("content") or []) for item in body.get("output") or []]
     if refusal := next((part for part in parts if part.get("type") == "refusal"), None):
         raise ReplyError(f"the model refused: {_detail(refusal.get('refusal'))}")
@@ -438,8 +448,7 @@ def _retry_after(response: httpx2.Response) -> float | None:
     return seconds if seconds > 0 else None
 
 
-def _reason(response: httpx2.Response) -> str:
-    body = _parse(response.content)
+def _reason(response: httpx2.Response, body: object) -> str:
     try:
         message = _innermost(body)
     except RecursionError:  # Only a hostile server nests this deep.

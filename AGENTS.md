@@ -25,6 +25,8 @@ The tests in `tests/test_modelwire.py` run each class against `httpx2.MockTransp
 - `_Client` offers services and calls no hooks, so each class reads top to bottom with its own constructor and `ask()`.
 - Decoders trust the types the API documents.
   Only error bodies and System One answers, which vary by server and by model, get type checks.
+- `APIError` means the server produced no reply, and `ReplyError` means the model's reply is unusable.
+  A success body with an `error` object raises `APIError`, whichever API sends it.
 - Nothing is retried after the request is sent, because a second request can pay for the same reply again.
 
 ## Non-goals

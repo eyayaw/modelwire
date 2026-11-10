@@ -109,8 +109,8 @@ Read failures are not retried, because the server can still be processing the re
 
 ## Errors
 
-Catch `APIError` for an HTTP error or a response without a reply;
-its `status_code`, `retry_after`, and `request_id` attributes describe the response.
+Catch `APIError` for an HTTP error or a response without a reply, such as a failed generation;
+its `status_code`, `code`, `retry_after`, and `request_id` attributes describe the response.
 Catch `ReplyError` for an unusable reply,
 including a refusal, truncated text, or an incomplete answer.
 Transport failures raise `httpx2.TransportError`, and invalid client arguments raise `ValueError`.

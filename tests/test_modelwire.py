@@ -278,10 +278,12 @@ def test_a_failure_after_the_request_was_sent_is_not_retried(sleeps, failure):
 @pytest.mark.parametrize(
     ("body", "message"),
     [
-        # OpenRouter nests the provider's error as JSON text under metadata.raw.
+        # OpenRouter nests the provider's error as JSON text under metadata.raw, and its code
+        # is the HTTP status as a number.
         (
             {
                 "error": {
+                    "code": 422,
                     "message": "Provider returned error",
                     "metadata": {"raw": json.dumps({"error": {"message": "Bad schema."}})},
                 }
@@ -306,6 +308,15 @@ def test_a_client_error_is_not_retried_and_quotes_the_innermost_message(sleeps, 
     with pytest.raises(APIError, match=f"^HTTP 422 .*: {re.escape(message)}$") as error:
         run(Server(httpx2.Response(422, json=body)), reply)
     assert error.value.status_code == 422
+    assert error.value.code is None
+    assert sleeps == []
+
+
+def test_a_failed_generation_raises_api_error_with_its_code(sleeps):
+    body = {"status": "failed", "error": {"code": "server_error", "message": "Upstream died."}}
+    with pytest.raises(APIError, match=r"^HTTP 200 .*: Upstream died\.$") as error:
+        run(Server(httpx2.Response(200, json=body), ok(OpenAI)), reply)
+    assert error.value.code == "server_error"
     assert sleeps == []
 
 
@@ -356,8 +367,8 @@ def test_an_error_without_a_server_message_says_what_to_do(response, message):
         ),
         (
             OpenAI,
-            {"status": "failed", "error": {"code": "server_error"}},
-            "^the reply ended with status 'failed': server_error$",
+            {"status": "incomplete", "incomplete_details": {"reason": "content_filter"}},
+            "^the reply ended with status 'incomplete': content_filter$",
         ),
         (OpenAI, {"status": "completed", "output": []}, "^the reply has no text$"),
         (
