@@ -22,7 +22,9 @@ The tests in `tests/test_modelwire.py` run each class against `httpx2.MockTransp
 
 - Code that builds a request or reads a response cites the official reference in a comment.
   When a provider changes its API, start from those links, and send or read only what a source documents.
-- `_Client` offers services and calls no hooks, so each class reads top to bottom with its own constructor and `ask()`.
+- `_Client` owns the one constructor and calls no hooks.
+  Each class states its URL, key header, and any extra headers as class attributes,
+  then reads top to bottom in its own `ask()`.
 - Decoders trust the types the API documents.
   Only error bodies and System One answers, which vary by server and by model, get type checks.
 - `APIError` means the server produced no reply, and `ReplyError` means the model's reply is unusable.

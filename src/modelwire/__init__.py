@@ -34,9 +34,6 @@ _NO_TEXT = "the reply has no text"
 # OpenAI's SDK waits 5 s for a connection and 600 s for the rest, since a reasoning model can
 # think for minutes: https://github.com/openai/openai-python/blob/main/src/openai/_constants.py
 _CONNECT_TIMEOUT = 5.0
-# The version the official SDK sends, checked on 2026-10-31:
-# https://platform.claude.com/docs/en/api/versioning
-_ANTHROPIC_VERSION = frozendict({"anthropic-version": "2026-10-21"})
 # The header each API puts its request ID in:
 # https://developers.openai.com/api/reference/overview#debugging-requests
 # https://platform.claude.com/docs/en/api/errors#request-id
@@ -88,16 +85,23 @@ class ReplyError(Exception):
 
 
 class _Client:
+    _base_url: str
+    _key_header: str
+    _key_prefix = ""
+    _headers: frozendict[str, str] = frozendict()
+
     def __init__(
         self,
-        base_url: str,
+        key: str | None = None,
         *,
-        credentials: dict[str, str],
-        headers: frozendict[str, str] = frozendict(),
-        timeout: float,
-        retries: int,
-        transport: httpx2.AsyncBaseTransport | None,
+        base_url: str | None = None,
+        timeout: float = 600.0,
+        retries: int = 2,
+        transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
+        """base_url defaults to the provider's own server. A key of None sends no credentials."""
+        credentials = _credentials(self._key_header, key, self._key_prefix)
+        base_url = self._base_url if base_url is None else base_url
         try:
             url = httpx2.URL(base_url)
         except httpx2.InvalidURL:
@@ -118,7 +122,7 @@ class _Client:
         # A followed redirect would carry the key to whichever host the server names.
         self._http = httpx2.AsyncClient(
             base_url=url,
-            headers=headers | credentials,
+            headers=self._headers | credentials,
             timeout=httpx2.Timeout(timeout, connect=min(timeout, _CONNECT_TIMEOUT)),
             follow_redirects=False,
             transport=transport,
@@ -167,22 +171,9 @@ class _Client:
 class OpenAI(_Client):
     """Client for OpenAI's Responses API, or any server compatible with it."""
 
-    def __init__(
-        self,
-        key: str | None = None,
-        *,
-        base_url: str = "https://api.openai.com/v1",
-        timeout: float = 600.0,
-        retries: int = 2,
-        transport: httpx2.AsyncBaseTransport | None = None,
-    ) -> None:
-        super().__init__(
-            base_url,
-            credentials=_credentials("Authorization", key, "Bearer "),
-            timeout=timeout,
-            retries=retries,
-            transport=transport,
-        )
+    _base_url = "https://api.openai.com/v1"
+    _key_header = "Authorization"
+    _key_prefix = "Bearer "
 
     async def ask(
         self,
@@ -221,23 +212,11 @@ class OpenAI(_Client):
 class Anthropic(_Client):
     """Client for Anthropic's Messages API, or any server compatible with it."""
 
-    def __init__(
-        self,
-        key: str | None = None,
-        *,
-        base_url: str = "https://api.anthropic.com/v1",
-        timeout: float = 600.0,
-        retries: int = 2,
-        transport: httpx2.AsyncBaseTransport | None = None,
-    ) -> None:
-        super().__init__(
-            base_url,
-            credentials=_credentials("x-api-key", key),
-            headers=_ANTHROPIC_VERSION,
-            timeout=timeout,
-            retries=retries,
-            transport=transport,
-        )
+    _base_url = "https://api.anthropic.com/v1"
+    _key_header = "x-api-key"
+    # The version the official SDK sends, checked on 2026-10-31:
+    # https://platform.claude.com/docs/en/api/versioning
+    _headers = frozendict({"anthropic-version": "2026-10-21"})
 
     async def ask(
         self,
@@ -276,22 +255,9 @@ class Anthropic(_Client):
 class SystemOne(_Client):
     """Client for TypeSafe's System One API, or any server compatible with it."""
 
-    def __init__(
-        self,
-        key: str | None = None,
-        *,
-        base_url: str = "https://api.typesafe.ai/v1",
-        timeout: float = 600.0,
-        retries: int = 2,
-        transport: httpx2.AsyncBaseTransport | None = None,
-    ) -> None:
-        super().__init__(
-            base_url,
-            credentials=_credentials("Authorization", key, "Bearer "),
-            timeout=timeout,
-            retries=retries,
-            transport=transport,
-        )
+    _base_url = "https://api.typesafe.ai/v1"
+    _key_header = "Authorization"
+    _key_prefix = "Bearer "
 
     async def ask(
         self,
@@ -407,7 +373,7 @@ def _number(value: object) -> bool:
     return type(value) is int or (type(value) is float and math.isfinite(value))
 
 
-def _credentials(header: str, key: str | None, prefix: str = "") -> dict[str, str]:
+def _credentials(header: str, key: str | None, prefix: str) -> dict[str, str]:
     if key is None:
         return {}
     # httpx2 would quote a malformed key in its error, and so leak it.
