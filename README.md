@@ -8,7 +8,7 @@ Each client has one request method, `ask()`.
 modelwire requires Python 3.15+ and depends only on [httpx2](https://pypi.org/project/httpx2/).
 
 ```sh
-uv add "modelwire @ git+https://github.com/eyayaw/modelwire@v0.1.0"
+uv add "modelwire @ git+https://github.com/eyayaw/modelwire@v0.2.0"
 ```
 
 ## Generative models
