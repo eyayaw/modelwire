@@ -1,6 +1,6 @@
 [project]
 name = "modelwire"
-version = "0.1.0"
+version = "0.2.0"
 description = "Async clients for the OpenAI Responses, Anthropic Messages, Gemini Interactions, and System One APIs, and servers compatible with them."
 readme = "README.md"
 requires-python = ">=3.15"
