@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased](https://github.com/eyayaw/modelwire/compare/v0.2.0...HEAD)
+
+### Added
+
+- `modelwire.sdk.transport()`, which sends a class's requests through the provider's SDK client.
+
 ## [0.2.0](https://github.com/eyayaw/modelwire/releases/tag/v0.2.0) - 2026-11-10
 
 ### Added

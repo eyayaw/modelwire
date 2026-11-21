@@ -16,8 +16,12 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "anthropic>=2.8.0",
+    "google-genai>=3.3.0",
+    "openai>=3.51.0",
     "pytest>=9.2",
     "pytest-randomly>=5",
     "ruff>=0.17",
     "ty>=0.0.86",
+    "typesafe-sdk>=0.7.5",
 ]

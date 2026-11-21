@@ -14,10 +14,14 @@ _Client      checks the URL and the arguments, owns the httpx2 client, _post ret
   Anthropic  ask(): request body --> _post("messages") --> _messages_reply
   Gemini     ask(): request body --> _post("interactions") --> _interaction_reply
   SystemOne  ask(): request body --> _post("systemone") --> _complete per question
+
+sdk          transport(client): an httpx2 transport that hands each request to a provider's
+             SDK client and returns its response, or raises the httpx2 error it wraps
 ```
 
-All code is in `src/modelwire/__init__.py`.
-The tests in `tests/test_modelwire.py` run each class against `httpx2.MockTransport`.
+The classes are in `src/modelwire/__init__.py`,
+and the tests in `tests/test_modelwire.py` run each class against `httpx2.MockTransport`.
+`src/modelwire/sdk.py` and `tests/test_sdk.py` hold the SDK transport and its tests.
 
 ## Design
 
@@ -26,6 +30,16 @@ The tests in `tests/test_modelwire.py` run each class against `httpx2.MockTransp
 - `_Client` owns the one constructor and calls no hooks.
   Each class states its URL, key header, and any extra headers as class attributes,
   then reads top to bottom in its own `ask()`.
+- `modelwire.sdk` is standalone.
+  `__init__.py` imports nothing from it,
+  and it reaches a class only through the public `transport` argument,
+  so the class keeps its own request body, retries, timeout, and decoders.
+  The SDKs are dev dependencies: `sdk.py` imports them for type checking,
+  and `typesafe_sdk` at run time only inside `_typesafe`.
+  To remove the feature, delete `src/modelwire/sdk.py`, `tests/test_sdk.py`,
+  the README's "SDK clients" section, the `sdk` lines in this file,
+  and the `SyntaxWarning` filter in `pytest.toml`,
+  then run `uv remove --dev anthropic google-genai openai typesafe-sdk`.
 - Decoders trust the types the API documents.
   Only error bodies and System One answers, which vary by server and by model, get type checks.
 - `APIError` means the server produced no reply, and `ReplyError` means the model's reply is unusable.
