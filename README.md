@@ -113,6 +113,73 @@ A server's `x-should-retry` header overrides the status,
 and a requested retry delay over 60 seconds raises `APIError` immediately.
 Read failures are not retried, because the server can still be processing the request.
 
+## SDK clients
+
+`modelwire.sdk.transport()` sends a class's requests through the provider's own SDK client.
+Use it when you need something only the SDK offers,
+such as the OpenAI SDK's `workload_identity` authentication.
+Build the SDK client yourself and pass its transport to the modelwire class of the same provider.
+`ask()` keeps its arguments, its return value, and its errors, except as noted below.
+
+```python
+from openai import AsyncOpenAI
+
+from modelwire import OpenAI
+from modelwire.sdk import transport
+
+sdk = AsyncOpenAI()  # reads OPENAI_API_KEY
+async with OpenAI(transport=transport(sdk)) as client:
+    reply = await client.ask("gpt-6.1-terra", PROMPT)
+await sdk.close()
+```
+
+`transport()` takes an `openai.AsyncOpenAI` for `OpenAI`, an `anthropic.AsyncAnthropic` for
+`Anthropic`, a `google.genai.Client` for `Gemini`, and a `typesafe_sdk.AsyncTypeSafeClient` for
+`SystemOne`, and raises `TypeError` for any other client.
+`ask()` raises `TypeError`, before sending,
+when the class belongs to another provider than the client.
+modelwire installs none of these packages, so add the one you use to your project.
+
+The SDK client's key, base URL, and HTTP settings apply, so give the modelwire class no `key`.
+modelwire's checks on its own `base_url`, such as refusing to send a key over plain HTTP,
+do not cover the SDK client's.
+Error messages and `repr()` still name the class's own `base_url`.
+`timeout` and `retries` still apply: modelwire sets the timeout on each request
+and retries as described above, with the SDK's own retries off.
+A redirect raises `APIError` here too,
+unless you gave TypeSafe's SDK an HTTP client that follows redirects.
+With workload identity, OpenAI's SDK sends a request a second time after an HTTP 401,
+once it has refreshed its token.
+Closing the modelwire client leaves the SDK client open, so close it yourself.
+Give the SDK an httpx2 client, each SDK's default.
+The transport recognizes only httpx2 errors and responses,
+so with another HTTP client a reply raises `TypeError`,
+the SDK's own errors reach the caller, and modelwire retries nothing.
+
+Google's SDK has no retry or redirect setting for a single request,
+so `transport()` and `ask()` raise `ValueError` unless its client has both off:
+
+```python
+from google import genai
+from google.genai.types import HttpOptions, HttpRetryOptions
+
+from modelwire import Gemini
+from modelwire.sdk import transport
+
+options = HttpOptions(
+    retry_options=HttpRetryOptions(attempts=1), async_client_args={"follow_redirects": False}
+)
+sdk = genai.Client(http_options=options)  # reads GOOGLE_API_KEY or GEMINI_API_KEY
+client = Gemini(transport=transport(sdk))
+```
+
+Google's SDK also applies one time limit to every phase of a request,
+so a connection can wait the whole `timeout`.
+An error the SDK raises before it sends a request passes through unchanged,
+such as TypeSafe's `TypeSafeError` for a request without questions.
+TypeSafe's SDK keeps only the parsed body of an error response,
+so the message of a `SystemOne` `APIError` can differ from the one raised without the SDK.
+
 ## Errors
 
 Catch `APIError` for an HTTP error or a response without a reply, such as a failed generation;

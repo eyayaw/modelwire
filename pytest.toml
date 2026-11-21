@@ -2,7 +2,12 @@
 testpaths = ["tests"]
 addopts = ["-ra"]
 strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  # google-genai 3.3.0 has an invalid escape in types.py; compiling it warns, and "error" would
+  # turn that into a failed import.
+  'ignore:"\\/" is an invalid escape sequence:SyntaxWarning',
+]
 log_level = "INFO"
 faulthandler_timeout = 60
 faulthandler_exit_on_timeout = true
